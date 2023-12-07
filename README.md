@@ -2,7 +2,7 @@
 
 This page provides documentation about our proprietary JavaScript interpreter for safe, multi-tenant execution of untrusted JavaScript code in a sandboxed environment.
 
-`LAST UPDATED: 4 Dec 2023`
+`LAST UPDATED: 7 Dec 2023`
 
 ## Features
 
@@ -30,22 +30,22 @@ This page provides documentation about our proprietary JavaScript interpreter fo
   - configurable limit for the maximum ops to be executed by a script
   - configurable limit for the total allocated memory per script execution
 
-- no JIT compilation
-  - avoids a massive attack surface
-
-- no support for advanced objects and functions
-  - e.g. setTimeout, Uint8Array, Buffer etc.
-  - this is by design - reduces the attack surface
-
-- no RegExp support
-  - this is by design - to prevent regex-based DoS attacks
-
 - no built-in I/O access from scripts
   - no network access
   - no file system acccess
   - no OS/threads/console/JVM access
 
 - no built-in access to Java reflection
+
+- no JIT compilation
+  - avoids a massive attack surface
+
+- no support for advanced objects and functions
+  - e.g. `setTimeout`, `Uint8Array`, `Buffer` etc.
+  - this is by design - to reduce the attack surface
+
+- no `RegExp` support
+  - this is by design - to prevent regex-based DoS attacks
 
 
 ## How to support TypeScript or latest JavaScript syntax
@@ -61,7 +61,7 @@ In order to execute scripts written in TypeScript or later versions of JavaScrip
 
 This example illustrates a simple evaluation of JavaScript expressions:
 
-```javascript
+```java
 // Returns 50 (wrapped in Val object)
 Val result = JSEngine.eval("20 + 30");
 
@@ -73,7 +73,7 @@ long num = result.asLong();
 
 Often, the same script might be needed to be executed multiple times. The `Abstract Syntax Tree` of a parsed script can be reused to avoid parsing it multiple times for multiple executions of the same script:
 
-```javascript
+```java
 // Parse the script:
 ParsedJS parsedJs = JSEngine.parse("let x = 1; ++x");
 
@@ -88,7 +88,7 @@ Val result2 = parsedJs.eval(); // returns 2 again
 
 Besides the built-in global objects/classes like String, Math, etc. that are available in the global scope, additional custom values or objects can be added to the global scope:
 
-```javascript
+```java
 ParsedJS script = JSEngine.parse("X + Y");
 
 // Set up custom globals:
@@ -101,11 +101,57 @@ Map<String, Object> customGlobals = Map.of(
 Val result = script.eval(customGlobals); // returns 300
 ```
 
+### Defining custom objects
+
+In addition to custom constants, custom objects can be added to the global scope. The following examples illustrate the creation of custom objects with various numbers and types of parameters.
+
+```java
+Obj myObj = JSObjects.builder("myObj")
+        .withMethod("hi", () -> Vals.str("Hello!"))
+        .withMethod("next", (Val x) -> Vals.num(x.asLong() + 1))
+        .withMethod("sum", (Val x, Val y) -> Vals.num(x.asLong() + y.asLong()))
+        .build();
+
+Map<String, Obj> customGlobals = Map.of("myObj", myObj);
+
+// Prints "Hello!"
+System.out.println(JSEngine.eval("myObj.hi()", customGlobals));
+
+// Prints "8"
+System.out.println(JSEngine.eval("myObj.next(7)", customGlobals));
+
+// Prints "5"
+System.out.println(JSEngine.eval("myObj.sum(2, 3)", customGlobals));
+```
+
+### Defining custom objects with varargs methods
+
+This example illustrates the creation of custom objects with `varargs` methods:
+
+```java
+Obj myUtils = JSObjects.builder("myUtils")
+        .withVarargsMethod("concat", (List<Val> args) -> {
+            String concatenated = args.stream()
+                    .map(Val::asStr)
+                    .collect(Collectors.joining(""));
+
+            return Vals.str(concatenated);
+        })
+        .build();
+
+Map<String, Obj> customGlobals = Map.of("myUtils", myUtils);
+
+String script = "myUtils.concat('x', 1, 'y', 2, 'z')";
+        
+// Prints "x1y2z"
+System.out.println(JSEngine.eval(script, customGlobals));
+```
+
 ### Add custom global object: console
 
-Additionally, custom objects can be added to the global scope. For instance, creating a custom global object `console` with a method `log` can be configured like this:
+This example defines a custom global object `console` with a method `log` can be configured like this:
 
-```javascript
+```java
 Obj console = JSObjects.builder("console")
     .withVarargsMethod("log", (args) -> {
         System.out.println(args.stream()
@@ -124,7 +170,7 @@ script.eval(Map.of("console", console)); // prints 'Hello'
 
 This example illustrates the configuration of a custom global object `ctx` with methods `getVar` and `setVar`, for setting and accessing variables in a custom context:
 
-```javascript
+```java
 Map<Object, Object> vars = new ConcurrentHashMap<>();
 vars.put("firstName", "John");
 vars.put("lastName", "Doe");
@@ -157,7 +203,7 @@ Object fullName = vars.get("fullName"); // Returns "JOHN DOE"
 
 This example illustrates the securty measures for limiting the number of executed ops that can be executed for each script execution. For simpicity, this example uses the default execution limits, but they can be customized for each script.
 
-```javascript
+```java
 // Throws an error: 'Reached the execution limit!'
 JSEngine.eval("while (true) { }");
 ```
@@ -166,12 +212,12 @@ JSEngine.eval("while (true) { }");
 
 This example illustrates the securty measures for limiting the allocated memory for each script execution. For simpicity, this example uses the default memory limits, but they can be customized for each script.
 
-```javascript
+```java
 // Throws an error: 'Reached the memory limit!'
 JSEngine.eval("'x'.repeat(1000000)");
 ```
 
-```javascript
+```java
 // Throws an error: 'Reached the memory limit!'
 JSEngine.eval("""
   let arr = [];
@@ -181,7 +227,7 @@ JSEngine.eval("""
 """);
 ```
 
-```javascript
+```java
 // Throws an error: 'Reached the memory limit!'
 JSEngine.eval("""
   let s = '';
@@ -195,7 +241,7 @@ JSEngine.eval("""
 
 This example illustrates the securty measures for limiting the allocated memory and the number of executed ops for each script execution, with custom-defined limits for each script.
 
-```javascript
+```java
 ParsedJS parsedJS = JSEngine.parse("'x'.repeat(10000)");
 
 // Throws an error: 'Reached the memory limit!'
@@ -209,7 +255,7 @@ parsedJS.eval(EvalOpts.builder()
 
 For each execution of a script, the stats about the used memory and the number of executed ops can be retrieved. The stats are retrieved only for the last execution of the script, together with the result.
 
-```javascript
+```java
 ParsedJS script = JSEngine.parse("x + 20");
 
 // Execute the script and retrieve the results and execution info
@@ -231,4 +277,68 @@ System.out.println(stats.getOpsCount());
 
 // Print the used memory in bytes
 System.out.println(stats.getUsedMemInBytes());
+```
+
+### Handling syntax errors
+
+This example illustrates the catching and handling of syntax errors:
+
+```java
+try {
+    // Try to evaluate a script with syntax error:
+    JSEngine.eval("123 +");
+
+} catch (SyntaxError e) {
+    // Prints the error message:
+    System.out.println(e.getMessage());
+
+    // Get the position, if needed:
+    Position pos = e.getPosition();
+    int line = pos.getLine();
+    int column = pos.getColumn();
+}
+```
+
+Here is the resulting console output:
+
+```
+[line: 1, column: 5] Unexpected end of file
+```
+
+### Handling runtime errors
+
+This example illustrates the catching and handling of runtime errors:
+
+```java
+try {
+    // Try to evaluate a script with runtime error:
+    JSEngine.parse("my-script.js", """
+        function a(foo) {
+          foo.x = 1
+        }
+
+        function b(x) {
+          a(x);
+        }
+
+        b(null);
+        """.trim())
+            .eval();
+
+} catch (EvalError e) {
+    // Prints the error message:
+    System.out.println(e.getMessage());
+
+    // Prints the stack trace:
+    e.getCallStack().forEach(System.out::println);
+}
+```
+
+Executing the script above will throw a runtime error. Here is the resulting console output:
+
+```
+Type NULL has no properties
+foo.x = 1 (my-script.js:2)
+a(x) (my-script.js:6)
+b(null) (my-script.js:9)
 ```
