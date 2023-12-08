@@ -2,7 +2,7 @@
 
 This page provides documentation about our proprietary JavaScript interpreter for safe, multi-tenant execution of untrusted JavaScript code in a sandboxed environment.
 
-`LAST UPDATED: 7 Dec 2023`
+`LAST UPDATED: 8 Dec 2023`
 
 ## Features
 
@@ -171,13 +171,17 @@ script.eval(Map.of("console", console)); // prints 'Hello'
 This example illustrates the configuration of a custom global object `ctx` with methods `getVar` and `setVar`, for setting and accessing variables in a custom context:
 
 ```java
-Map<Object, Object> vars = new ConcurrentHashMap<>();
+Map<String, Object> vars = new ConcurrentHashMap<>();
 vars.put("firstName", "John");
 vars.put("lastName", "Doe");
 
 Obj ctx = JSObjects.builder("ctx")
         .withConstants(Map.of("x", 100, "y", 200))
-        .withMethod("getVar", (name) -> Vals.from(vars.get(name.asStr())))
+        .withMethod("getVar", (name) -> {
+            Object javaVal = vars.get(name.asStr());
+            Optional<Val> jsVal = Vals.optional(javaVal);
+            return jsVal.orElse(Vals.UNDEFINED);
+        })
         .withMethod("setVar", (name, jsVal) -> {
             Object javaVal = jsVal.getValue();
             vars.put(name.asStr(), javaVal);
@@ -193,10 +197,86 @@ String js = """
     ctx.setVar('fullName', firstName + ' ' + lastName);
 """;
 
-JSEngine.parse(js)
-        .eval(Map.of("ctx", ctx));
+JSEngine.eval(js, Map.of("ctx", ctx));
 
 Object fullName = vars.get("fullName"); // Returns "JOHN DOE"
+```
+
+### Add custom global object with dynamic properties
+
+This example illustrates the configuration of a custom global object `env` with custom, dynamic properties. The custom logic for accessing, updating, deleting and enumerating the properties is specified by implementing the `DynamicPropResolver` interface:
+
+```java
+Map<String, Object> vars = new ConcurrentHashMap<>();
+vars.put("firstName", "John");
+vars.put("lastName", "Doe");
+
+Obj env = JSObjects.createDynamicObj("env", new DynamicPropResolver() {
+
+    @Override
+    public Optional<Val> getProp(String propName) {
+        System.out.println("Reading property: " + propName);
+        Object value = vars.get(propName);
+
+        return Vals.optional(value);
+    }
+
+    @Override
+    public boolean setProp(String propName, Val value) {
+        System.out.println("Writing property: " + propName);
+        Object javaVal = value.getValue();
+        vars.put(propName, javaVal);
+
+        return true; // `true` means the operation was successful
+    }
+
+    @Override
+    public boolean deleteProp(String propName) {
+        return false; // do not allow deleting props
+    }
+
+    @Override
+    public Map<String, Val> getAllProps() {
+        return vars.entrySet().stream()
+                .collect(To.map(Map.Entry::getKey, e -> Vals.from(e.getValue())));
+    }
+});
+
+// Sets a new variable "fullName":
+String js = """
+        const firstName = env.firstName.toUpperCase();
+        const lastName = env.lastName.toUpperCase();
+        env.fullName = firstName + ' ' + lastName;
+                        
+        // Returns the names of the env properties:
+        Object.keys(env);
+          """;
+
+Map<String, Obj> customGlobals = Map.of("env", env);
+        
+// The result is the list of keys of the `env` object
+Val result = JSEngine.eval(js, customGlobals);
+
+// Returns "JOHN DOE"
+Object fullName = vars.get("fullName");
+
+System.out.println("Full name: " + fullName);
+
+List<String> keys = result.asList().stream()
+        .map(Val::asStr)
+        .toList();
+
+System.out.println("All keys: " + keys);
+```
+
+The output is:
+
+```
+Reading property: firstName
+Reading property: lastName
+Writing property: fullName
+Full name: JOHN DOE
+All keys: [firstName, lastName, fullName]
 ```
 
 ### Safety: execution limits
@@ -251,9 +331,9 @@ parsedJS.eval(EvalOpts.builder()
         .build());
 ```
 
-### Getting stats about a script execution
+### Getting statistics about a script execution
 
-For each execution of a script, the stats about the used memory and the number of executed ops can be retrieved. The stats are retrieved only for the last execution of the script, together with the result.
+For each execution of a script, the statistics about the used memory and the number of executed ops can be retrieved. The statistics are retrieved only for the last execution of the script, together with the result.
 
 ```java
 ParsedJS script = JSEngine.parse("x + 20");
@@ -266,7 +346,7 @@ ResultAndInfo resultAndInfo = script.evalAndGetDetails(EvalOpts.builder()
 // Get the result and convert it to long
 long result = resultAndInfo.getResult().asLong();
 
-// Get stats about the last execution of the script
+// Get statistics about the last execution of the script
 ExecutionStats stats = resultAndInfo.getStats();
 
 // Print the result (number 70)
@@ -329,7 +409,7 @@ try {
     // Prints the error message:
     System.out.println(e.getMessage());
 
-    // Prints the stack trace:
+    // The full stack trace of the JS script can be accessed:
     e.getCallStack().forEach(System.out::println);
 }
 ```
