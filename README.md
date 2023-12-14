@@ -2,7 +2,7 @@
 
 This page provides documentation about our proprietary JavaScript interpreter for safe, multi-tenant execution of untrusted JavaScript code in a sandboxed environment.
 
-`LAST UPDATED: 8 Dec 2023`
+`LAST UPDATED: 14 Dec 2023`
 
 ## Features
 
@@ -426,3 +426,138 @@ foo.x = 1 (my-script.js:2)
 a(x) (my-script.js:6)
 b(null) (my-script.js:9)
 ```
+
+## Benchmarks
+
+The following micro-benchmarks have been performed on a laptop with Intel® Core™ i7 with 8 cores @ 1.30GHz and 16 GB RAM.
+
+Each of the scripts was parsed once, and then it was iteratively executed many times (typically millions) on a pool of 8 threads.
+
+The micro-benchmarks were performed without prior warm-up.
+
+### Benchmark setup
+
+The following setup was used:
+
+```java
+Obj myObj = JSObjects.builder("myObj")
+        .withMethod("plaintext", () -> Vals.str("Some text"))
+        .withMethod("next", (Val x) -> Vals.num(x.asLong() + 1))
+        .withMethod("sum", (Val x, Val y) -> Vals.num(x.asLong() + y.asLong()))
+        .build();
+
+Map<String, Val> customGlobals = Map.of(
+        "X", Vals.num(1),
+        "Y", Vals.num(2),
+        "S", Vals.str("Hello, world!"),
+        "myObj", myObj
+);
+
+ParsedJS parsedJS = JSEngine.parse(js);
+
+runBenchmark(() -> parsedJS.eval(customGlobals));
+```
+
+### Simple math expression
+
+The following script was benchmarked:
+
+```javascript
+X + Y
+```
+
+Performance:
+ - parsing: `1.6M ops/sec`
+ - executing: `3.4M ops/sec`
+
+### Simple string expression
+
+The following script was benchmarked:
+
+```javascript
+`${X} ${S}`.toUpperCase()
+```
+
+Performance:
+ - parsing: `784K ops/sec`
+ - executing: `1.7M ops/sec`
+
+### Sum of numbers (iteration)
+
+The following script was benchmarked:
+
+```javascript
+function iter (n) {
+  let sum = 0;
+
+  for (let i = 0; i < 100; i++) {
+    sum += i;
+  }
+
+  return sum;
+}
+```
+
+Performance:
+ - parsing: `173K ops/sec`
+ - executing `iter(5)`: `748K ops/sec`
+ - executing `iter(10)`: `595K ops/sec`
+ - executing `iter(100)`: `147K ops/sec`
+ - executing `iter(1000)`: `17K ops/sec`
+
+### Sum of numbers (recursion)
+
+The following script was benchmarked:
+
+```javascript
+function sum (n) {
+  return n > 1 ? sum(n - 1) * n : 1
+}
+```
+
+Performance:
+ - parsing: `260K ops/sec`
+ - executing `sum(5)`: `220K ops/sec`
+ - executing `sum(10)`: `96K ops/sec`
+ - executing `sum(100)`: `2K ops/sec`
+ - executing `sum(200)`: `685 ops/sec`
+ - executing `sum(300)`: `438 ops/sec`
+ - executing `sum(400)`: throws an error: 'Reached the call stack limit!'
+
+NOTE: The recursion performs much slower than iteration.
+
+### Complex expression: map, join and string comprison
+
+The following script was benchmarked:
+
+```javascript
+[].map.call([1,2,3], String).join(', ') === '1, 2, 3'
+```
+
+Performance:
+ - parsing: `342K ops/sec`
+ - executing: `676K ops/sec`
+
+### Reading and writing dynamic object properties
+
+The following script was benchmarked:
+
+```javascript
+const firstName = env.firstName.toUpperCase();
+const lastName = env.lastName.toUpperCase();
+
+env.fullName = firstName + ' ' + lastName;
+```
+
+Performance:
+ - parsing: `284K ops/sec`
+ - executing: `1.2M ops/sec`
+
+### Calling custom methods
+
+The following scripts are benchmarking the calling of the custom methods provided in the `myObj` custom object. Please see their source code in the `Benchmark setup` section above.
+
+Performance:
+ - executing `myObj.plaintext()`: `2.8M ops/sec`
+ - executing `myObj.next(12345)`: `2.8M ops/sec`
+ - executing `myObj.sum(40, 50)`: `2.7M ops/sec`
