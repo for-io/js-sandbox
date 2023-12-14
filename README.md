@@ -153,17 +153,21 @@ This example defines a custom global object `console` with a method `log` can be
 
 ```java
 Obj console = JSObjects.builder("console")
-    .withVarargsMethod("log", (args) -> {
-        System.out.println(args.stream()
+    .withVarargsMethod("log", (List<Val> args) -> {
+        String msg = args.stream()
                 .map(Val::asStr)
-                .collect(Collectors.joining(" "))
-        );
+                .collect(Collectors.joining(" "));
+
+        System.out.println(msg);
+        
         return Vals.UNDEFINED;
     })
     .build();
 
 ParsedJS script = JSEngine.parse("console.log('Hello')");
-script.eval(Map.of("console", console)); // prints 'Hello'
+
+// Prints 'Hello'
+script.eval(Map.of("console", console));
 ```
 
 ### Add custom global object: a context with variables
