@@ -2,7 +2,7 @@
 
 This page provides documentation about our proprietary JavaScript interpreter for safe, multi-tenant execution of untrusted JavaScript code in a sandboxed environment.
 
-`LAST UPDATED: 14 Dec 2023`
+`LAST UPDATED: 26 Jan 2024`
 
 ## Features
 
@@ -467,8 +467,8 @@ X + Y
 ```
 
 Performance:
- - parsing: `1.6M ops/sec`
- - executing: `3.4M ops/sec`
+ - parsing: `1.6M executions/sec`
+ - executing: `3.4M executions/sec`
 
 ### Simple string expression
 
@@ -479,8 +479,8 @@ The following script was benchmarked:
 ```
 
 Performance:
- - parsing: `784K ops/sec`
- - executing: `1.7M ops/sec`
+ - parsing: `784K executions/sec`
+ - executing: `1.7M executions/sec`
 
 ### Sum of numbers (iteration)
 
@@ -499,11 +499,11 @@ function iter (n) {
 ```
 
 Performance:
- - parsing: `173K ops/sec`
- - executing `iter(5)`: `748K ops/sec`
- - executing `iter(10)`: `595K ops/sec`
- - executing `iter(100)`: `147K ops/sec`
- - executing `iter(1000)`: `17K ops/sec`
+ - parsing: `173K executions/sec`
+ - executing `iter(5)`: `748K executions/sec`
+ - executing `iter(10)`: `595K executions/sec`
+ - executing `iter(100)`: `147K executions/sec`
+ - executing `iter(1000)`: `17K executions/sec`
 
 ### Sum of numbers (recursion)
 
@@ -516,12 +516,12 @@ function sum (n) {
 ```
 
 Performance:
- - parsing: `260K ops/sec`
- - executing `sum(5)`: `220K ops/sec`
- - executing `sum(10)`: `96K ops/sec`
- - executing `sum(100)`: `2K ops/sec`
- - executing `sum(200)`: `685 ops/sec`
- - executing `sum(300)`: `438 ops/sec`
+ - parsing: `260K executions/sec`
+ - executing `sum(5)`: `220K executions/sec`
+ - executing `sum(10)`: `96K executions/sec`
+ - executing `sum(100)`: `2K executions/sec`
+ - executing `sum(200)`: `685 executions/sec`
+ - executing `sum(300)`: `438 executions/sec`
  - executing `sum(400)`: throws an error: 'Reached the call stack limit!'
 
 NOTE: The recursion performs much slower than iteration.
@@ -535,8 +535,8 @@ The following script was benchmarked:
 ```
 
 Performance:
- - parsing: `342K ops/sec`
- - executing: `676K ops/sec`
+ - parsing: `342K executions/sec`
+ - executing: `676K executions/sec`
 
 ### Reading and writing dynamic object properties
 
@@ -550,14 +550,14 @@ env.fullName = firstName + ' ' + lastName;
 ```
 
 Performance:
- - parsing: `284K ops/sec`
- - executing: `1.2M ops/sec`
+ - parsing: `284K executions/sec`
+ - executing: `1.2M executions/sec`
 
 ### Calling custom methods
 
 The following scripts are benchmarking the calling of the custom methods provided in the `myObj` custom object. Please see their source code in the `Benchmark setup` section above.
 
 Performance:
- - executing `myObj.plaintext()`: `2.8M ops/sec`
- - executing `myObj.next(12345)`: `2.8M ops/sec`
- - executing `myObj.sum(40, 50)`: `2.7M ops/sec`
+ - executing `myObj.plaintext()`: `2.8M executions/sec`
+ - executing `myObj.next(12345)`: `2.8M executions/sec`
+ - executing `myObj.sum(40, 50)`: `2.7M executions/sec`
