@@ -2,7 +2,7 @@
 
 This page provides documentation about our proprietary JavaScript interpreter for safe, multi-tenant execution of untrusted JavaScript code in a sandboxed environment.
 
-`LAST UPDATED: 26 Jan 2024`
+`LAST UPDATED: 17 Apr 2024`
 
 ## Features
 
@@ -40,9 +40,10 @@ This page provides documentation about our proprietary JavaScript interpreter fo
 - no JIT compilation
   - avoids a massive attack surface
 
-- no support for advanced objects and functions
-  - e.g. `setTimeout`, `Uint8Array`, `Buffer` etc.
+- no support for advanced built-in classes and functions
+  - e.g. `Buffer`, `Uint8Array`, `setTimeout` etc.
   - this is by design - to reduce the attack surface
+  - NOTE: the standard classes like objects, arrays, strings, dates, math etc. are supported
 
 - no `RegExp` support
   - this is by design - to prevent regex-based DoS attacks
@@ -62,11 +63,8 @@ In order to execute scripts written in TypeScript or later versions of JavaScrip
 This example illustrates a simple evaluation of JavaScript expressions:
 
 ```java
-// Returns 50 (wrapped in Val object)
-Val result = JSEngine.eval("20 + 30");
-
-// Returns 50
-long num = result.asLong();
+// Basic usage:
+long result = (long) JSEngine.eval("20 + 30"); // returns 50
 ```
 
 ### Reusing a parsed script
@@ -75,21 +73,23 @@ Often, the same script might be needed to be executed multiple times. The `Abstr
 
 ```java
 // Parse the script:
-ParsedJS parsedJs = JSEngine.parse("let x = 1; ++x");
+ParsedScript script = JSEngine.parse("let x = 1; ++x");
 
 // Execute the parsed script:
-Val result = parsedJs.eval(); // returns 2
+long result = (long) script.eval(); // returns 2
 
 // Execute the parsed script again:
-Val result2 = parsedJs.eval(); // returns 2 again
+long result2 = (long) script.eval(); // returns 2 again
 ```
+
+NOTE: Each invocation of `eval()` creates a new, isolated evaluation context and executes the script in it. Thus, multiple executions of the same script in different contexts are fully isolated.
 
 ### Add custom global constants
 
 Besides the built-in global objects/classes like String, Math, etc. that are available in the global scope, additional custom values or objects can be added to the global scope:
 
 ```java
-ParsedJS script = JSEngine.parse("X + Y");
+ParsedScript script = JSEngine.parse("X + Y");
 
 // Set up custom globals:
 Map<String, Object> customGlobals = Map.of(
@@ -98,77 +98,142 @@ Map<String, Object> customGlobals = Map.of(
 );
 
 // Execute the script, giving it context
-Val result = script.eval(customGlobals); // returns 300
+long result = (long) script.eval(customGlobals); // returns 300
 ```
 
-### Defining custom objects
+### Defining custom objects (without reflection)
 
 In addition to custom constants, custom objects can be added to the global scope. The following examples illustrate the creation of custom objects with various numbers and types of parameters.
 
 ```java
-Obj myObj = JSObjects.builder("myObj")
-        .withMethod("hi", () -> Vals.str("Hello!"))
-        .withMethod("next", (Val x) -> Vals.num(x.asLong() + 1))
-        .withMethod("sum", (Val x, Val y) -> Vals.num(x.asLong() + y.asLong()))
-        .build();
+CustomDefinitions definitions = def -> {
+    Obj myObj = def.builder("myObj")
+            .withMethod("hi", (EvalCtx ctx) -> ctx.make().str("Hello!"))
+            .withMethod("next", (EvalCtx ctx, Val x) -> Vals.num(x.asLong() + 1))
+            .withMethod("sum", (EvalCtx ctx, Val x, Val y) -> Vals.num(x.asLong() + y.asLong()))
+            .withMethod("abc", (EvalCtx ctx, Val a, Val b, Val c) -> ctx.make().arr(List.of(a, b, c)))
+            .build();
 
-Map<String, Obj> customGlobals = Map.of("myObj", myObj);
+    return Map.of("myObj", myObj);
+};
 
 // Prints "Hello!"
-System.out.println(JSEngine.eval("myObj.hi()", customGlobals));
+System.out.println(JSEngine.eval("myObj.hi()", definitions));
 
 // Prints "8"
-System.out.println(JSEngine.eval("myObj.next(7)", customGlobals));
+System.out.println(JSEngine.eval("myObj.next(7)", definitions));
 
 // Prints "5"
-System.out.println(JSEngine.eval("myObj.sum(2, 3)", customGlobals));
+System.out.println(JSEngine.eval("myObj.sum(2, 3)", definitions));
 ```
 
-### Defining custom objects with varargs methods
+### Defining custom objects with reflection
 
-This example illustrates the creation of custom objects with `varargs` methods:
+For increased security, the reflection calls are performed outside the script execution engine, in a high-level API wrapper which builds on top of the low-level API for custom object definitions.
+
+The following example defines two custom objects: `console` and `utils`. Their methods are available to the script context and are being called by the sample JavaScript.
 
 ```java
-Obj myUtils = JSObjects.builder("myUtils")
-        .withVarargsMethod("concat", (List<Val> args) -> {
-            String concatenated = args.stream()
-                    .map(Val::asStr)
-                    .collect(Collectors.joining(""));
+static class Console {
 
-            return Vals.str(concatenated);
-        })
-        .build();
+    public static void log(String msg, Object... args) {
+        System.out.println(msg + " " + Arrays.toString(args));
+    }
 
-Map<String, Obj> customGlobals = Map.of("myUtils", myUtils);
+    public static void info(String msg, Object... args) {
+        System.out.println("INFO " + msg + " " + Arrays.toString(args));
+    }
+
+}
+
+static class Utils {
+
+    public static int sum(byte x, int y) {
+        return x + y;
+    }
+
+    public static int len(Object... items) {
+        return items.length;
+    }
+
+}
+
+public static void main(String[] programArgs) {
+    CustomDefinitions definitions = def -> {
+        Obj console = def.builder("console")
+                .withStaticMethodsFromClass(Console.class)
+                .build();
+
+        Obj utils = def.builder("utils")
+                .withStaticMethodsFromClass(Utils.class)
+                .build();
+
+        return Map.of("console", console, "utils", utils);
+    };
+
+    ParsedScript script = JSEngine.parse("""
+                            console.log('Hello', 'World', 123);
+                            console.info('Foo', 'bar');
+                            console.log('Length', utils.len(1, 2, 'f', true, [3]));
+            """);
+
+    script.eval(definitions);
+}
+```
+
+### Defining a custom object with varargs method (without reflection)
+
+This example illustrates the creation of custom object with `varargs` method:
+
+```java
+CustomDefinitions definitions = def -> {
+    Obj myUtils = def.builder("myUtils")
+            .withVarargsMethod("concat", (EvalCtx ctx, List<Val> args) -> {
+                String concatenated = args.stream()
+                        .map(Val::asStr)
+                        .collect(Collectors.joining(""));
+
+                return ctx.make().str(concatenated);
+            })
+            .build();
+
+
+    return Map.of("myUtils", myUtils);
+};
 
 String script = "myUtils.concat('x', 1, 'y', 2, 'z')";
-        
+
 // Prints "x1y2z"
-System.out.println(JSEngine.eval(script, customGlobals));
+System.out.println(JSEngine.eval(script, definitions));
 ```
+
+NOTE: For reflection-based method definitions please see the example  `Defining custom objects with reflection`.
 
 ### Add custom global object: console
 
 This example defines a custom global object `console` with a method `log` can be configured like this:
 
 ```java
-Obj console = JSObjects.builder("console")
-    .withVarargsMethod("log", (List<Val> args) -> {
-        String msg = args.stream()
-                .map(Val::asStr)
-                .collect(Collectors.joining(" "));
+CustomDefinitions definitions = def -> {
+    Obj console = def.builder("console")
+            .withVarargsMethod("log", (EvalCtx ctx, List<Val> args) -> {
+                String msg = args.stream()
+                        .map(Val::asStr)
+                        .collect(Collectors.joining(" "));
 
-        System.out.println(msg);
-        
-        return Vals.UNDEFINED;
-    })
-    .build();
+                System.out.println(msg);
 
-ParsedJS script = JSEngine.parse("console.log('Hello')");
+                return Vals.UNDEFINED;
+            })
+            .build();
 
-// Prints 'Hello'
-script.eval(Map.of("console", console));
+    return Map.of("console", console);
+};
+
+JSEngine.eval("console.log('Hello')", definitions); // prints 'Hello'
 ```
+
+NOTE: For reflection-based object definitions please see the example  `Defining custom objects with reflection`.
 
 ### Add custom global object: a context with variables
 
@@ -179,32 +244,38 @@ Map<String, Object> vars = new ConcurrentHashMap<>();
 vars.put("firstName", "John");
 vars.put("lastName", "Doe");
 
-Obj ctx = JSObjects.builder("ctx")
-        .withConstants(Map.of("x", 100, "y", 200))
-        .withMethod("getVar", (name) -> {
-            Object javaVal = vars.get(name.asStr());
-            Optional<Val> jsVal = Vals.optional(javaVal);
-            return jsVal.orElse(Vals.UNDEFINED);
-        })
-        .withMethod("setVar", (name, jsVal) -> {
-            Object javaVal = jsVal.getValue();
-            vars.put(name.asStr(), javaVal);
-            return Vals.UNDEFINED;
-        })
-        .build();
+CustomDefinitions definitions = def -> {
+    Obj ctx = def.builder("ctx")
+            .withConstants(Map.of("x", 100, "y", 200))
+            .withMethod("getVar", (EvalCtx evalCtx, Val name) -> {
+                Object javaVal = vars.get(name.asStr());
+                Optional<Val> jsVal = evalCtx.make().optional(javaVal);
+                return jsVal.orElse(Vals.UNDEFINED);
+            })
+            .withMethod("setVar", (EvalCtx evalCtx, Val name, Val jsVal) -> {
+                Object javaVal = jsVal.getValue();
+                vars.put(name.asStr(), javaVal);
+                return Vals.UNDEFINED;
+            })
+            .build();
 
-// This script sets a new variable "fullName" in the context:
+    return Map.of("ctx", ctx);
+};
+
+// Sets a new variable "fullName":
 String js = """
-    const firstName = ctx.getVar('firstName').toUpperCase();
-    const lastName = ctx.getVar('lastName').toUpperCase();
+        const firstName = ctx.getVar('firstName').toUpperCase();
+        const lastName = ctx.getVar('lastName').toUpperCase();
+        ctx.setVar('fullName', firstName + ' ' + lastName);
+        """;
 
-    ctx.setVar('fullName', firstName + ' ' + lastName);
-""";
+JSEngine.eval(js, definitions);
 
-JSEngine.eval(js, Map.of("ctx", ctx));
-
-Object fullName = vars.get("fullName"); // Returns "JOHN DOE"
+// Returns "JOHN DOE"
+Object fullName = vars.get("fullName");
 ```
+
+NOTE: For reflection-based object definitions please see the example  `Defining custom objects with reflection`.
 
 ### Add custom global object with dynamic properties
 
@@ -215,36 +286,40 @@ Map<String, Object> vars = new ConcurrentHashMap<>();
 vars.put("firstName", "John");
 vars.put("lastName", "Doe");
 
-Obj env = JSObjects.createDynamicObj("env", new DynamicPropResolver() {
+CustomDefinitions definitions = def -> {
+    Obj env = def.createDynamicObj("env", new DynamicPropResolver() {
 
-    @Override
-    public Optional<Val> getProp(String propName) {
-        System.out.println("Reading property: " + propName);
-        Object value = vars.get(propName);
+        @Override
+        public Optional<Val> getProp(EvalCtx ctx, String propName) {
+            System.out.println("Reading property: " + propName);
+            Object value = vars.get(propName);
 
-        return Vals.optional(value);
-    }
+            return ctx.make().optional(value);
+        }
 
-    @Override
-    public boolean setProp(String propName, Val value) {
-        System.out.println("Writing property: " + propName);
-        Object javaVal = value.getValue();
-        vars.put(propName, javaVal);
+        @Override
+        public boolean setProp(EvalCtx ctx, String propName, Val value) {
+            System.out.println("Writing property: " + propName);
+            Object javaVal = value.getValue();
+            vars.put(propName, javaVal);
 
-        return true; // `true` means the operation was successful
-    }
+            return true; // `true` means the operation was successful
+        }
 
-    @Override
-    public boolean deleteProp(String propName) {
-        return false; // do not allow deleting props
-    }
+        @Override
+        public boolean deleteProp(EvalCtx ctx, String propName) {
+            return false; // do not allow deleting props
+        }
 
-    @Override
-    public Map<String, Val> getAllProps() {
-        return vars.entrySet().stream()
-                .collect(To.map(Map.Entry::getKey, e -> Vals.from(e.getValue())));
-    }
-});
+        @Override
+        public Map<String, Val> getAllProps(EvalCtx ctx) {
+            return vars.entrySet().stream()
+                    .collect(To.map(Map.Entry::getKey, e -> ctx.make().from(e.getValue())));
+        }
+    });
+
+    return Map.of("env", env);
+};
 
 // Sets a new variable "fullName":
 String js = """
@@ -252,35 +327,19 @@ String js = """
         const lastName = env.lastName.toUpperCase();
         env.fullName = firstName + ' ' + lastName;
                         
-        // Returns the names of the env properties:
         Object.keys(env);
-          """;
-
-Map<String, Obj> customGlobals = Map.of("env", env);
-        
-// The result is the list of keys of the `env` object
-Val result = JSEngine.eval(js, customGlobals);
+        """;
 
 // Returns "JOHN DOE"
 Object fullName = vars.get("fullName");
 
 System.out.println("Full name: " + fullName);
 
-List<String> keys = result.asList().stream()
-        .map(Val::asStr)
-        .toList();
+// The result is the list of keys of the `env` object
+List<String> keys = (List<String>) JSEngine.eval(js, definitions);
 
+// Prints All keys: [firstName, lastName, fullName]
 System.out.println("All keys: " + keys);
-```
-
-The output is:
-
-```
-Reading property: firstName
-Reading property: lastName
-Writing property: fullName
-Full name: JOHN DOE
-All keys: [firstName, lastName, fullName]
 ```
 
 ### Safety: execution limits
@@ -288,8 +347,8 @@ All keys: [firstName, lastName, fullName]
 This example illustrates the securty measures for limiting the number of executed ops that can be executed for each script execution. For simpicity, this example uses the default execution limits, but they can be customized for each script.
 
 ```java
-// Throws an error: 'Reached the execution limit!'
-JSEngine.eval("while (true) { }");
+// Throws LimitsError: 'Reached the execution limit!'
+JSEngine.eval("while (true) {}");
 ```
 
 ### Safety: memory limits
@@ -297,28 +356,28 @@ JSEngine.eval("while (true) { }");
 This example illustrates the securty measures for limiting the allocated memory for each script execution. For simpicity, this example uses the default memory limits, but they can be customized for each script.
 
 ```java
-// Throws an error: 'Reached the memory limit!'
+// Throws LimitsError: 'Reached the memory limit!'
 JSEngine.eval("'x'.repeat(1000000)");
 ```
 
 ```java
-// Throws an error: 'Reached the memory limit!'
+// Throws LimitsError: 'Reached the memory limit!'
 JSEngine.eval("""
-  let arr = [];
-  for (let i = 0; i < 1000; i++) {
-      arr.push('x'.repeat(100000));
-  }
-""");
+        let arr = [];
+        for (let i = 0; i < 1000; i++) {
+            arr.push('x'.repeat(100000));
+        }
+        """);
 ```
 
 ```java
-// Throws an error: 'Reached the memory limit!'
+// Throws LimitsError: 'Reached the memory limit!'
 JSEngine.eval("""
-  let s = '';
-  for (let i = 0; i < 1000; i++) {
-      s += 'x'.repeat(100000);
-  }
-""");
+        let s = '';
+        for (let i = 0; i < 1000; i++) {
+            s += 'x'.repeat(100000);
+        }
+        """);
 ```
 
 ### Safety: custom limits for memory and ops
@@ -326,10 +385,10 @@ JSEngine.eval("""
 This example illustrates the securty measures for limiting the allocated memory and the number of executed ops for each script execution, with custom-defined limits for each script.
 
 ```java
-ParsedJS parsedJS = JSEngine.parse("'x'.repeat(10000)");
+ParsedScript script = JSEngine.parse("'x'.repeat(10000)");
 
-// Throws an error: 'Reached the memory limit!'
-parsedJS.eval(EvalOpts.builder()
+// Throws LimitsError: 'Reached the memory limit!'
+script.eval(EvalOpts.builder()
         .maxMemInBytes(9000)
         .maxOps(5000)
         .build());
@@ -340,26 +399,26 @@ parsedJS.eval(EvalOpts.builder()
 For each execution of a script, the statistics about the used memory and the number of executed ops can be retrieved. The statistics are retrieved only for the last execution of the script, together with the result.
 
 ```java
-ParsedJS script = JSEngine.parse("x + 20");
+ParsedScript script = JSEngine.parse("x + 20");
 
 // Execute the script and retrieve the results and execution info
 ResultAndInfo resultAndInfo = script.evalAndGetDetails(EvalOpts.builder()
         .customGlobals(Map.of("x", 50))
         .build());
 
-// Get the result and convert it to long
-long result = resultAndInfo.getResult().asLong();
+// get the result and convert it to long
+long result = (long) resultAndInfo.getResult();
 
-// Get statistics about the last execution of the script
+// get the stats about the execution of the script
 ExecutionStats stats = resultAndInfo.getStats();
 
-// Print the result (number 70)
+// prints the result (number 70)
 System.out.println(result);
 
-// Print the number of executed ops
+// prints the number of executed ops
 System.out.println(stats.getOpsCount());
 
-// Print the used memory in bytes
+// prints the used memory in bytes
 System.out.println(stats.getUsedMemInBytes());
 ```
 
@@ -374,6 +433,7 @@ try {
 
 } catch (SyntaxError e) {
     // Prints the error message:
+    // [line: 1, column: 5] Unexpected end of file
     System.out.println(e.getMessage());
 
     // Get the position, if needed:
@@ -396,17 +456,18 @@ This example illustrates the catching and handling of runtime errors:
 ```java
 try {
     // Try to evaluate a script with runtime error:
-    JSEngine.parse("my-script.js", """
-        function a(foo) {
-          foo.x = 1
-        }
+    JSEngine.parse("""
+                    function a(foo) {
+                      foo.x = 1
+                    }
 
-        function b(x) {
-          a(x);
-        }
+                    function b(x) {
+                      a(x);
+                    }
 
-        b(null);
-        """.trim())
+                    b(null);
+                    """.trim(),
+                   ScriptInfo.filename("my-script.js"))
             .eval();
 
 } catch (EvalError e) {
@@ -414,7 +475,7 @@ try {
     System.out.println(e.getMessage());
 
     // The full stack trace of the JS script can be accessed:
-    e.getCallStack().forEach(System.out::println);
+    e.getCallStack().print();
 }
 ```
 
